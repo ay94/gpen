@@ -389,31 +389,16 @@ class TokenClassificationPipeline(Pipeline):
             entities (:obj:`dict`): The entities predicted by the pipeline.
         """
         # Get the first entity in the entity group
-        entity = entities[0]["entity"].split("-")[-1]
-        scores = np.nanmean([entity["score"] for entity in entities])
+        entity = entities[0]["entity"]
+        scores = np.mean([entity["score"] for entity in entities])
         tokens = [entity["word"] for entity in entities]
 
         entity_group = {
             "entity_group": entity,
             "score": np.mean(scores),
             "word": self.tokenizer.convert_tokens_to_string(tokens),
-            "start": entities[0]["start"],
-            "end": entities[-1]["end"],
         }
         return entity_group
-
-    def get_tag(self, entity_name: str) -> Tuple[str, str]:
-        if entity_name.startswith("B-"):
-            bi = "B"
-            tag = entity_name[2:]
-        elif entity_name.startswith("I-"):
-            bi = "I"
-            tag = entity_name[2:]
-        else:
-            # It's not in B-, I- format
-            bi = "B"
-            tag = entity_name
-        return bi, tag
 
     def group_entities(self, entities: List[dict]) -> List[dict]:
         """
@@ -426,31 +411,105 @@ class TokenClassificationPipeline(Pipeline):
         entity_groups = []
         entity_group_disagg = []
 
+        if entities:
+            last_idx = entities[-1]["index"]
+
         for entity in entities:
+            is_last_idx = entity["index"] == last_idx
             if not entity_group_disagg:
-                entity_group_disagg.append(entity)
+                entity_group_disagg += [entity]
+                if is_last_idx:
+                    entity_groups += [self.group_sub_entities(entity_group_disagg)]
                 continue
 
-            # If the current entity is similar and adjacent to the previous entity,
-            # append it to the disaggregated entity group
-            # The split is meant to account for the "B" and "I" prefixes
-            # Shouldn't merge if both entities are B-type
-            bi, tag = self.get_tag(entity["entity"])
-            last_bi, last_tag = self.get_tag(entity_group_disagg[-1]["entity"])
-
-            if tag == last_tag and bi != "B":
-                # Modify subword type to be previous_type
-                entity_group_disagg.append(entity)
+            # If the current entity is similar and adjacent to the previous entity, append it to the disaggregated entity group
+            # The split is meant to account for the "B" and "I" suffixes
+            if (
+                    entity["entity"].split("-")[-1] == entity_group_disagg[-1]["entity"].split("-")[-1]
+                    and entity["index"] == entity_group_disagg[-1]["index"] + 1
+            ):
+                entity_group_disagg += [entity]
+                # Group the entities at the last entity
+                if is_last_idx:
+                    entity_groups += [self.group_sub_entities(entity_group_disagg)]
+            # If the current entity is different from the previous entity, aggregate the disaggregated entity group
             else:
-                # If the current entity is different from the previous entity
-                # aggregate the disaggregated entity group
-                entity_groups.append(self.group_sub_entities(entity_group_disagg))
+                entity_groups += [self.group_sub_entities(entity_group_disagg)]
                 entity_group_disagg = [entity]
-        if entity_group_disagg:
-            # it's the last entity, add it to the entity groups
-            entity_groups.append(self.group_sub_entities(entity_group_disagg))
+                # If it's the last entity, add it to the entity groups
+                if is_last_idx:
+                    entity_groups += [self.group_sub_entities(entity_group_disagg)]
 
         return entity_groups
+
+    # def group_sub_entities(self, entities: List[dict]) -> dict:
+    #     """
+    #     Group together the adjacent tokens with the same entity predicted.
+    #     Args:
+    #         entities (:obj:`dict`): The entities predicted by the pipeline.
+    #     """
+    #     # Get the first entity in the entity group
+    #     entity = entities[0]["entity"].split("-")[-1]
+    #     scores = np.nanmean([entity["score"] for entity in entities])
+    #     tokens = [entity["word"] for entity in entities]
+    #
+    #     entity_group = {
+    #         "entity_group": entity,
+    #         "score": np.mean(scores),
+    #         "word": self.tokenizer.convert_tokens_to_string(tokens),
+    #         "start": entities[0]["start"],
+    #         "end": entities[-1]["end"],
+    #     }
+    #     return entity_group
+    #
+    # def get_tag(self, entity_name: str) -> Tuple[str, str]:
+    #     if entity_name.startswith("B-"):
+    #         bi = "B"
+    #         tag = entity_name[2:]
+    #     elif entity_name.startswith("I-"):
+    #         bi = "I"
+    #         tag = entity_name[2:]
+    #     else:
+    #         # It's not in B-, I- format
+    #         bi = "B"
+    #         tag = entity_name
+    #     return bi, tag
+    #
+    # def group_entities(self, entities: List[dict]) -> List[dict]:
+    #     """
+    #     Find and group together the adjacent tokens with the same entity predicted.
+    #     Args:
+    #         entities (:obj:`dict`): The entities predicted by the pipeline.
+    #     """
+    #
+    #     entity_groups = []
+    #     entity_group_disagg = []
+    #
+    #     for entity in entities:
+    #         if not entity_group_disagg:
+    #             entity_group_disagg.append(entity)
+    #             continue
+    #
+    #         # If the current entity is similar and adjacent to the previous entity,
+    #         # append it to the disaggregated entity group
+    #         # The split is meant to account for the "B" and "I" prefixes
+    #         # Shouldn't merge if both entities are B-type
+    #         bi, tag = self.get_tag(entity["entity"])
+    #         last_bi, last_tag = self.get_tag(entity_group_disagg[-1]["entity"])
+    #
+    #         if tag == last_tag and bi != "B":
+    #             # Modify subword type to be previous_type
+    #             entity_group_disagg.append(entity)
+    #         else:
+    #             # If the current entity is different from the previous entity
+    #             # aggregate the disaggregated entity group
+    #             entity_groups.append(self.group_sub_entities(entity_group_disagg))
+    #             entity_group_disagg = [entity]
+    #     if entity_group_disagg:
+    #         # it's the last entity, add it to the entity groups
+    #         entity_groups.append(self.group_sub_entities(entity_group_disagg))
+    #
+    #     return entity_groups
 
 
 NerPipeline = TokenClassificationPipeline
